@@ -6,7 +6,7 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const ALT_PORT = 5001; // พอร์ตเสริมสำหรับ Discord Callback
+const ALT_PORT = 5001; // พอร์ตเสริมสำหรับ Discord Callback / Uptime Services
 const DB_FILE = path.join(__dirname, 'local_database.json');
 const JWT_SECRET = process.env.JWT_SECRET || "very-good-key";
 
@@ -40,10 +40,18 @@ app.use((req, res, next) => {
     next();
 });
 
-app.get('/', (req, res) => res.send('HSHO Unified Standalone Server Running!'));
+// รองรับ Uptime Robot และเว็บตรวจสอบสถานะ 24/7
+app.get('/', (req, res) => {
+    res.status(200).send('🟢 HSHO Unified Standalone Server Running & Alive 24/7!');
+});
+
+app.get('/ping', (req, res) => {
+    res.status(200).send('PONG');
+});
+
 app.get('/health', (req, res) => res.json({ status: 'OK', storage: 'Local JSON File (No MongoDB)' }));
 
-// รองรับ Discord OAuth Callback ที่พอร์ต 5001
+// รองรับ Discord OAuth Callback ที่พอร์ต 5001 หรือพอร์ตหลัก
 app.all(['/callback', '/api/callback'], (req, res) => {
     const code = req.query.code;
     console.log(`[Discord Callback] Received code: ${code}`);
@@ -146,7 +154,7 @@ app.all('*', (req, res) => {
     res.json({ status: "success", code: 0, message: "OK", data: {} });
 });
 
-// เปิดพอร์ตหลัก 3000
+// เปิดพอร์ตหลักสำหรับ Game API (ค่าพอร์ต 3000 หรือจาก .env)
 app.listen(PORT, () => {
     console.log(`====================================================`);
     console.log(` HSHO Main Server running on port ${PORT}`);
@@ -154,9 +162,13 @@ app.listen(PORT, () => {
     console.log(`====================================================`);
 });
 
-// เปิดพอร์ตเสริม 5001 สำหรับ Callback
+// เปิดพอร์ตเสริมสำหรับ Callback และ Uptime Services (พอร์ต 5001)
 const altApp = express();
+altApp.use(express.json());
+altApp.get('/', (req, res) => res.status(200).send('🟢 HSHO Callback & Uptime Service Port 5001 Active'));
+altApp.get('/ping', (req, res) => res.status(200).send('PONG'));
 altApp.use(app);
+
 altApp.listen(ALT_PORT, () => {
-    console.log(` [Callback Server] Also listening on port ${ALT_PORT}`);
+    console.log(` [Callback & Uptime Server] Also listening on port ${ALT_PORT}`);
 });
