@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://<username>:<password>@cluster.mongodb.net/hsho_server?retryWrites=true&w=majority";
+const MONGO_URI = process.env.MONGO_URI || "";
 
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
@@ -63,17 +63,17 @@ const Inventory = mongoose.model('Inventory', inventorySchema);
 const CharacterSlot = mongoose.model('CharacterSlot', characterSlotSchema);
 const Room = mongoose.model('Room', roomSchema);
 
-// Middleware Log Requests
+// Middleware Log Requests (ช่วยให้เห็นว่าเกมยิง URL อะไรมาบ้างใน Render Logs)
 app.use((req, res, next) => {
-    console.log(`[MongoDB-Action] ${req.method} ${req.url}`);
+    console.log(`[HSHO-Request] ${req.method} ${req.url}`);
     next();
 });
 
 app.get('/', (req, res) => res.send('HSHO MongoDB Real Database Server Running!'));
 app.get('/health', (req, res) => res.json({ status: 'OK', db: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected' }));
 
-// Server Info API
-app.all(['/serverinfo', '/*/serverinfo'], (req, res) => {
+// Server Info & Config APIs
+app.all(['/serverinfo', '/*/serverinfo', '/api/serverinfo'], (req, res) => {
     res.json({
         status: "success",
         code: 0,
@@ -89,9 +89,9 @@ app.all(['/serverinfo', '/*/serverinfo'], (req, res) => {
 });
 
 // 1. ระบบยืนยันตัวตนผู้เล่น (Auto Register เข้า MongoDB)
-app.all(['/live/player/authen', '/*/live/player/authen'], async (req, res) => {
+app.all(['/live/player/authen', '/*/live/player/authen', '/api/live/player/authen'], async (req, res) => {
     try {
-        const uid = req.body.uid || req.query.uid || req.body.discord_id || "default_user";
+        const uid = req.body.uid || req.query.uid || req.body.discord_id || req.body.user_id || "default_user";
         let player = await Player.findOne({ uid });
 
         if (!player) {
@@ -106,14 +106,18 @@ app.all(['/live/player/authen', '/*/live/player/authen'], async (req, res) => {
             status: "success",
             code: 0,
             message: "OK",
-            data: { token: player.token, uid: player.uid, name: player.name }
+            data: { 
+                token: player.token || "mock_token", 
+                uid: player.uid, 
+                name: player.name 
+            }
         });
     } catch (err) {
         res.status(500).json({ status: "error", code: -1, message: err.message });
     }
 });
 
-// 2. ดึงข้อมูลผู้เล่น
+// 2. ข้อมูลผู้เล่นและไอเทม
 app.all(['/live/player/getdata', '/*/live/player/getdata'], async (req, res) => {
     try {
         const uid = req.body.uid || req.query.uid || "default_user";
@@ -139,7 +143,13 @@ app.all(['/live/player/playerstat/get', '/*/live/player/playerstat/get'], async 
     res.json({ status: "success", code: 0, message: "OK", data: stats });
 });
 
-// --- 3. ระบบหาห้อง (Matchmaking Room System with MongoDB) ---
+app.all(['/live/player/characterslot/get', '/*/live/player/characterslot/get'], async (req, res) => {
+    const uid = req.body.uid || req.query.uid || "default_user";
+    const slots = await CharacterSlot.findOne({ uid }) || { slots: [] };
+    res.json({ status: "success", code: 0, message: "OK", data: slots });
+});
+
+// 3. ระบบหาห้อง (Matchmaking)
 app.all(['/matchmaking/v1/room/create', '/*/matchmaking/v1/room/create'], async (req, res) => {
     try {
         const roomName = req.body.roomName || req.query.roomName || "Private Room";
@@ -156,12 +166,7 @@ app.all(['/matchmaking/v1/room/create', '/*/matchmaking/v1/room/create'], async 
             maxPlayers: 5
         });
 
-        res.json({
-            status: "success",
-            code: 0,
-            message: "Room created successfully",
-            data: newRoom
-        });
+        res.json({ status: "success", code: 0, message: "Room created successfully", data: newRoom });
     } catch (err) {
         res.status(500).json({ status: "error", code: -1, message: err.message });
     }
@@ -170,12 +175,7 @@ app.all(['/matchmaking/v1/room/create', '/*/matchmaking/v1/room/create'], async 
 app.all(['/matchmaking/v1/room/list', '/*/matchmaking/v1/room/list'], async (req, res) => {
     try {
         const rooms = await Room.find({});
-        res.json({
-            status: "success",
-            code: 0,
-            message: "OK",
-            data: { rooms }
-        });
+        res.json({ status: "success", code: 0, message: "OK", data: { rooms } });
     } catch (err) {
         res.status(500).json({ status: "error", code: -1, message: err.message });
     }
@@ -184,11 +184,7 @@ app.all(['/matchmaking/v1/room/list', '/*/matchmaking/v1/room/list'], async (req
 app.all(['/matchmaking/v1/room/join', '/*/matchmaking/v1/room/join'], async (req, res) => {
     try {
         const roomId = req.body.roomId || req.query.roomId;
-        let targetRoom = await Room.findOne({ roomId });
-
-        if (!targetRoom) {
-            targetRoom = await Room.findOne({}); // ถ้าหาไม่เจอ ดึงห้องแรกที่มี
-        }
+        let targetRoom = await Room.findOne({ roomId }) || await Room.findOne({});
 
         res.json({
             status: "success",
@@ -205,9 +201,15 @@ app.all(['/matchmaking/v1/room/join', '/*/matchmaking/v1/room/join'], async (req
     }
 });
 
-// ดักจับทุก Request ที่เหลือเพื่อป้องกัน Error code = 0
+// ดักจับทุก Request ที่เหลือ (Catch-all) เพื่อป้องกันเกมเด้ง Error code = 0 เวลาเรียก API อื่นๆ ที่ยังไม่ได้ประกาศ
 app.all('*', (req, res) => {
-    res.json({ status: "success", code: 0, message: "OK", data: {} });
+    console.log(`[Unhandled-Route] ${req.method} ${req.url}`);
+    res.json({ 
+        status: "success", 
+        code: 0, 
+        message: "OK", 
+        data: {} 
+    });
 });
 
 app.listen(PORT, () => {
