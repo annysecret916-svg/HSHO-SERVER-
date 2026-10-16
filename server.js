@@ -1,217 +1,243 @@
 require('dotenv').config();
 const express = require('express');
-const mongoose = require('mongoose');
+const fs = require('fs');
+const path = require('path');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const MONGO_URI = process.env.MONGO_URI || "";
+const DB_FILE = path.join(__dirname, 'local_database.json');
+const JWT_SECRET = process.env.JWT_SECRET || "very-good-key";
 
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
-// --- เชื่อมต่อ MongoDB Atlas ---
-mongoose.connect(MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true
-}).then(() => {
-    console.log("Connected to MongoDB successfully!");
-}).catch(err => {
-    console.error("MongoDB connection error:", err);
-});
+// --- 1. ระบบจัดการฐานข้อมูลจำลองผ่าน Local JSON File ---
+function readDB() {
+    if (!fs.existsSync(DB_FILE)) {
+        const initialData = {
+            serverinfo: {
+                correctversion: true,
+                serverVersion: "1.0.6.0",
+                ServerDevVersion: "1.0.6.0",
+                IsOnline: true,
+                IsDevOnline: true
+            },
+            players: {},
+            rooms: []
+        };
+        fs.writeFileSync(DB_FILE, JSON.stringify(initialData, null, 2));
+    }
+    return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+}
 
-// --- Mongoose Schemas & Models ---
-const playerSchema = new mongoose.Schema({
-    uid: { type: String, required: true, unique: true },
-    token: String,
-    name: { type: String, default: "HSH_Player" },
-    level: { type: Number, default: 99 },
-    glory: { type: Number, default: 99999 },
-    createdAt: { type: Date, default: Date.now }
-});
+function writeDB(data) {
+    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+}
 
-const playerStatSchema = new mongoose.Schema({
-    uid: { type: String, required: true, unique: true },
-    level: { type: Number, default: 99 },
-    exp: { type: Number, default: 0 },
-    glory: { type: Number, default: 99999 }
-});
-
-const inventorySchema = new mongoose.Schema({
-    uid: { type: String, required: true, unique: true },
-    items: { type: Array, default: [] }
-});
-
-const characterSlotSchema = new mongoose.Schema({
-    uid: { type: String, required: true, unique: true },
-    slots: { type: Array, default: [] }
-});
-
-const roomSchema = new mongoose.Schema({
-    roomId: { type: String, required: true, unique: true },
-    roomName: String,
-    ip: { type: String, default: "127.0.0.1" },
-    port: { type: Number, default: 7777 },
-    currentPlayers: { type: Number, default: 1 },
-    maxPlayers: { type: Number, default: 5 },
-    hostUid: String,
-    createdAt: { type: Date, default: Date.now }
-});
-
-const Player = mongoose.model('Player', playerSchema);
-const PlayerStat = mongoose.model('PlayerStat', playerStatSchema);
-const Inventory = mongoose.model('Inventory', inventorySchema);
-const CharacterSlot = mongoose.model('CharacterSlot', characterSlotSchema);
-const Room = mongoose.model('Room', roomSchema);
-
-// Middleware Log Requests (ช่วยให้เห็นว่าเกมยิง URL อะไรมาบ้างใน Render Logs)
+// Log Request เพื่อตรวจสอบการทำงาน
 app.use((req, res, next) => {
-    console.log(`[HSHO-Request] ${req.method} ${req.url}`);
+    console.log(`[HSHO-API] ${req.method} ${req.url}`);
     next();
 });
 
-app.get('/', (req, res) => res.send('HSHO MongoDB Real Database Server Running!'));
-app.get('/health', (req, res) => res.json({ status: 'OK', db: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected' }));
+app.get('/', (req, res) => res.send('HSHO Unified Standalone Server Running!'));
+app.get('/health', (req, res) => res.json({ status: 'OK', storage: 'Local JSON File (No MongoDB)' }));
 
-// Server Info & Config APIs
-app.all(['/serverinfo', '/*/serverinfo', '/api/serverinfo'], (req, res) => {
+
+// --- 2. ระบบ API ของเกม Home Sweet Home Online (รวมทุกฟังก์ชัน) ---
+
+// A. ตรวจสอบเวอร์ชันและสถานะเซิร์ฟเวอร์
+app.all(['/serverinfo', '/*/serverinfo', '/api/serverinfo', '/live/player/gameplay/checkversion'], (req, res) => {
+    const db = readDB();
     res.json({
         status: "success",
         code: 0,
         message: "OK",
         data: {
-            correctversion: true,
-            serverVersion: "1.0.6.0",
-            ServerDevVersion: "0.0.0.1",
-            IsOnline: true,
-            IsDevOnline: false
+            serverInfo: db.serverinfo
         }
     });
 });
 
-// 1. ระบบยืนยันตัวตนผู้เล่น (Auto Register เข้า MongoDB)
-app.all(['/live/player/authen', '/*/live/player/authen', '/api/live/player/authen'], async (req, res) => {
-    try {
-        const uid = req.body.uid || req.query.uid || req.body.discord_id || req.body.user_id || "default_user";
-        let player = await Player.findOne({ uid });
+// B. ระบบยืนยันตัวตน / ล็อกอินผู้เล่น (จำลอง Steam Auth & สร้างข้อมูลผู้เล่นอัตโนมัติ)
+app.all(['/live/player/authen', '/*/live/player/authen', '/api/live/player/authen'], (req, res) => {
+    const uid = req.body.ticket || req.body.uid || req.query.uid || "steam_76561198000000001";
+    const displayName = req.body.name || "HSH_Player";
+    const db = readDB();
 
-        if (!player) {
-            const token = "mongo_token_" + Math.random().toString(36).substring(7);
-            player = await Player.create({ uid, token, name: req.body.name || "HSH_Player" });
-            await PlayerStat.create({ uid });
-            await Inventory.create({ uid });
-            await CharacterSlot.create({ uid });
+    if (!db.players[uid]) {
+        const token = jwt.sign({ steamId: uid, type: 'session' }, JWT_SECRET, { expiresIn: '24h' });
+        db.players[uid] = {
+            steamId: uid,
+            session_token: token,
+            profile: {
+                display: "Profile_Default",
+                displayName: displayName,
+                lastNameUpdate: new Date(),
+                updatedAt: new Date()
+            },
+            coin: 250000,
+            amethyst: 1000,
+            amulet: 500,
+            role: "survivor",
+            inventory: {
+                characters: ["Hunter_Belle", "Survivor_Tim"],
+                skins: ["Skin_Belle_D_Default", "Skin_Tim_D_Default"],
+                items: [],
+                itemCounts: []
+            },
+            characterSlot: {
+                hunterSlot: [],
+                survivorSlot: [],
+                characterhunteritem: "Hunter_Belle",
+                characteritem: "Survivor_Tim"
+            },
+            stickerSlot: {
+                stickerpreset: 0,
+                stickerSet: [[], [], []]
+            },
+            banStatus: { permanentBanned: false },
+            immortalData: []
+        };
+        writeDB(db);
+    }
+
+    const player = db.players[uid];
+
+    res.json({
+        status: "success",
+        code: 0,
+        message: "OK",
+        data: {
+            player: player,
+            session_token: player.session_token
         }
-
-        res.json({
-            status: "success",
-            code: 0,
-            message: "OK",
-            data: { 
-                token: player.token || "mock_token", 
-                uid: player.uid, 
-                name: player.name 
-            }
-        });
-    } catch (err) {
-        res.status(500).json({ status: "error", code: -1, message: err.message });
-    }
+    });
 });
 
-// 2. ข้อมูลผู้เล่นและไอเทม
-app.all(['/live/player/getdata', '/*/live/player/getdata'], async (req, res) => {
-    try {
-        const uid = req.body.uid || req.query.uid || "default_user";
-        let player = await Player.findOne({ uid });
-        if (!player) {
-            player = await Player.create({ uid, name: "HSH_Player" });
+// C. ข้อมูลโปรไฟล์และข้อมูลผู้เล่นทั้งหมด
+app.all(['/live/player/getdata', '/*/live/player/getdata'], (req, res) => {
+    const db = readDB();
+    const uid = Object.keys(db.players)[0] || "default";
+    const player = db.players[uid] || { uid };
+    res.json({ status: "success", code: 0, message: "OK", data: player });
+});
+
+// D. ระบบคลังไอเทม (Inventory)
+app.all(['/live/player/inventory/getAll', '/*/live/player/inventory/getAll'], (req, res) => {
+    const db = readDB();
+    const uid = Object.keys(db.players)[0] || "default";
+    const player = db.players[uid] || {};
+    res.json({
+        status: "success",
+        code: 0,
+        message: "OK",
+        data: player.inventory || { characters: [], items: [], skins: [] }
+    });
+});
+
+// E. สล็อตตัวละคร (Character Slots)
+app.all(['/live/player/characterslot/get', '/*/live/player/characterslot/get'], (req, res) => {
+    const db = readDB();
+    const uid = Object.keys(db.players)[0] || "default";
+    const player = db.players[uid] || {};
+    res.json({
+        status: "success",
+        code: 0,
+        message: "OK",
+        data: {
+            session_token: player.session_token || "token",
+            slots: player.characterSlot || { hunterSlot: [], survivorSlot: [] },
+            role: player.role || "survivor"
         }
-        res.json({ status: "success", code: 0, message: "OK", data: player });
-    } catch (err) {
-        res.status(500).json({ status: "error", code: -1, message: err.message });
-    }
+    });
 });
 
-app.all(['/live/player/inventory/getAll', '/*/live/player/inventory/getAll'], async (req, res) => {
-    const uid = req.body.uid || req.query.uid || "default_user";
-    const inv = await Inventory.findOne({ uid }) || { items: [] };
-    res.json({ status: "success", code: 0, message: "OK", data: inv });
+app.all(['/live/player/characterslot/edit', '/*/live/player/characterslot/edit'], (req, res) => {
+    res.json({ status: "success", code: 0, message: "Updated successfully", data: req.body.slots || {} });
 });
 
-app.all(['/live/player/playerstat/get', '/*/live/player/playerstat/get'], async (req, res) => {
-    const uid = req.body.uid || req.query.uid || "default_user";
-    const stats = await PlayerStat.findOne({ uid }) || { level: 99, exp: 0, glory: 99999 };
-    res.json({ status: "success", code: 0, message: "OK", data: stats });
+// F. ระบบร้านค้าและรายการสินค้า (Store & Lists)
+app.all(['/live/store/list', '/live/productlisting/list', '/live/item/listall'], (req, res) => {
+    res.json({
+        status: "success",
+        code: 0,
+        message: "OK",
+        data: { store: [], items: [] }
+    });
 });
 
-app.all(['/live/player/characterslot/get', '/*/live/player/characterslot/get'], async (req, res) => {
-    const uid = req.body.uid || req.query.uid || "default_user";
-    const slots = await CharacterSlot.findOne({ uid }) || { slots: [] };
-    res.json({ status: "success", code: 0, message: "OK", data: slots });
+// G. ระบบกาชาปอง (Loot Box / Gacha)
+app.all(['/live/lootboxgo/api/open', '/api/open'], (req, res) => {
+    const { loot_box_short_code, amount = 1 } = req.body;
+    res.json({
+        status: "success",
+        code: 0,
+        message: "Opened successfully",
+        data: {
+            loot_box_type_str: loot_box_short_code || "Default_Gacha",
+            loot_box_amount: amount,
+            lootdrops: [
+                {
+                    short_code: "Item_Sample_01",
+                    name: "Sample Reward",
+                    type: "item",
+                    rarity: "1",
+                    amount: 1,
+                    is_dup: false
+                }
+            ]
+        }
+    });
 });
 
-// 3. ระบบหาห้อง (Matchmaking)
-app.all(['/matchmaking/v1/room/create', '/*/matchmaking/v1/room/create'], async (req, res) => {
-    try {
-        const roomName = req.body.roomName || req.query.roomName || "Private Room";
-        const roomId = "room_" + Date.now();
-        const hostUid = req.body.uid || req.query.uid || "host_user";
+// H. ระบบหาห้องและสร้างห้อง (Matchmaking Rooms)
+app.all(['/matchmaking/v1/room/create', '/*/matchmaking/v1/room/create'], (req, res) => {
+    const db = readDB();
+    const roomName = req.body.roomName || "Private Room";
+    const roomId = "room_" + Date.now();
 
-        const newRoom = await Room.create({
-            roomId,
-            roomName,
-            hostUid,
-            ip: "127.0.0.1",
-            port: 7777,
-            currentPlayers: 1,
-            maxPlayers: 5
-        });
+    const newRoom = {
+        roomId,
+        roomName,
+        ip: "127.0.0.1",
+        port: 7777,
+        currentPlayers: 1,
+        maxPlayers: 5
+    };
 
-        res.json({ status: "success", code: 0, message: "Room created successfully", data: newRoom });
-    } catch (err) {
-        res.status(500).json({ status: "error", code: -1, message: err.message });
-    }
+    db.rooms.push(newRoom);
+    writeDB(db);
+
+    res.json({ status: "success", code: 0, message: "Room created", data: newRoom });
 });
 
-app.all(['/matchmaking/v1/room/list', '/*/matchmaking/v1/room/list'], async (req, res) => {
-    try {
-        const rooms = await Room.find({});
-        res.json({ status: "success", code: 0, message: "OK", data: { rooms } });
-    } catch (err) {
-        res.status(500).json({ status: "error", code: -1, message: err.message });
-    }
+app.all(['/matchmaking/v1/room/list', '/*/matchmaking/v1/room/list'], (req, res) => {
+    const db = readDB();
+    res.json({ status: "success", code: 0, message: "OK", data: { rooms: db.rooms } });
 });
 
-app.all(['/matchmaking/v1/room/join', '/*/matchmaking/v1/room/join'], async (req, res) => {
-    try {
-        const roomId = req.body.roomId || req.query.roomId;
-        let targetRoom = await Room.findOne({ roomId }) || await Room.findOne({});
-
-        res.json({
-            status: "success",
-            code: 0,
-            message: "Joined room successfully",
-            data: {
-                roomId: targetRoom ? targetRoom.roomId : "room_default",
-                ip: targetRoom ? targetRoom.ip : "127.0.0.1",
-                port: targetRoom ? targetRoom.port : 7777
-            }
-        });
-    } catch (err) {
-        res.status(500).json({ status: "error", code: -1, message: err.message });
-    }
+app.all(['/matchmaking/v1/room/join', '/*/matchmaking/v1/room/join'], (req, res) => {
+    const db = readDB();
+    const targetRoom = db.rooms[0] || { roomId: "default", ip: "127.0.0.1", port: 7777 };
+    res.json({ status: "success", code: 0, message: "Joined successfully", data: targetRoom });
 });
 
-// ดักจับทุก Request ที่เหลือ (Catch-all) เพื่อป้องกันเกมเด้ง Error code = 0 เวลาเรียก API อื่นๆ ที่ยังไม่ได้ประกาศ
+// I. ระบบจัดการโปรไฟล์และสติ๊กเกอร์เบื้องต้น
+app.all(['/live/player/profile/edit', '/live/player/sticker/edit', '/live/player/inventory/addItem', '/live/player/inventory/removeItem'], (req, res) => {
+    res.json({ status: "success", code: 0, message: "Success", data: req.body });
+});
+
+// Catch-all ป้องกันเกมเด้ง Error เวลาเรียกหาเส้นทางอื่นๆ ที่ไม่ได้ดักไว้
 app.all('*', (req, res) => {
-    console.log(`[Unhandled-Route] ${req.method} ${req.url}`);
-    res.json({ 
-        status: "success", 
-        code: 0, 
-        message: "OK", 
-        data: {} 
-    });
+    res.json({ status: "success", code: 0, message: "OK", data: {} });
 });
 
+// --- 3. เปิดการทำงานเซิร์ฟเวอร์ ---
 app.listen(PORT, () => {
-    console.log(`MongoDB Server running on port ${PORT}`);
+    console.log(`====================================================`);
+    console.log(` HSHO Unified Standalone Server running on port ${PORT}`);
+    console.log(` Mode: Local JSON Storage (MongoDB Bypassed)`);
+    console.log(`====================================================`);
 });
