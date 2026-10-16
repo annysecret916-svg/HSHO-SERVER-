@@ -6,13 +6,13 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const ALT_PORT = 5001; // พอร์ตเสริมสำหรับ Discord Callback / Uptime Services
 const DB_FILE = path.join(__dirname, 'local_database.json');
 const JWT_SECRET = process.env.JWT_SECRET || "very-good-key";
 
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
-// --- 1. ระบบจัดการฐานข้อมูลจำลองผ่าน Local JSON File ---
 function readDB() {
     if (!fs.existsSync(DB_FILE)) {
         const initialData = {
@@ -35,17 +35,35 @@ function writeDB(data) {
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-// Log Request เพื่อตรวจสอบการทำงาน
 app.use((req, res, next) => {
     console.log(`[HSHO-API] ${req.method} ${req.url}`);
     next();
 });
 
-app.get('/', (req, res) => res.send('HSHO Unified Standalone Server Running!'));
+// รองรับ Uptime Robot และเว็บตรวจสอบสถานะ 24/7
+app.get('/', (req, res) => {
+    res.status(200).send('🟢 HSHO Unified Standalone Server Running & Alive 24/7!');
+});
+
+app.get('/ping', (req, res) => {
+    res.status(200).send('PONG');
+});
+
 app.get('/health', (req, res) => res.json({ status: 'OK', storage: 'Local JSON File (No MongoDB)' }));
 
-
-// --- 2. ระบบ API ของเกม Home Sweet Home Online ---
+// รองรับ Discord OAuth Callback ที่พอร์ต 5001 หรือพอร์ตหลัก
+app.all(['/callback', '/api/callback'], (req, res) => {
+    const code = req.query.code;
+    console.log(`[Discord Callback] Received code: ${code}`);
+    res.send(`<!DOCTYPE html>
+    <html>
+    <head><title>Discord Connected</title></head>
+    <body style="background:#111; color:#fff; font-family:sans-serif; text-align:center; padding-top:50px;">
+        <h2>Discord Authentication Successful!</h2>
+        <p>You can close this window now.</p>
+    </body>
+    </html>`);
+});
 
 app.all(['/serverinfo', '/*/serverinfo', '/api/serverinfo', '/live/player/gameplay/checkversion'], (req, res) => {
     const db = readDB();
@@ -53,9 +71,7 @@ app.all(['/serverinfo', '/*/serverinfo', '/api/serverinfo', '/live/player/gamepl
         status: "success",
         code: 0,
         message: "OK",
-        data: {
-            serverInfo: db.serverinfo
-        }
+        data: { serverInfo: db.serverinfo }
     });
 });
 
@@ -69,32 +85,14 @@ app.all(['/live/player/authen', '/*/live/player/authen', '/api/live/player/authe
         db.players[uid] = {
             steamId: uid,
             session_token: token,
-            profile: {
-                display: "Profile_Default",
-                displayName: displayName,
-                lastNameUpdate: new Date(),
-                updatedAt: new Date()
-            },
+            profile: { display: "Profile_Default", displayName: displayName },
             coin: 250000,
             amethyst: 1000,
             amulet: 500,
             role: "survivor",
-            inventory: {
-                characters: ["Hunter_Belle", "Survivor_Tim"],
-                skins: ["Skin_Belle_D_Default", "Skin_Tim_D_Default"],
-                items: [],
-                itemCounts: []
-            },
-            characterSlot: {
-                hunterSlot: [],
-                survivorSlot: [],
-                characterhunteritem: "Hunter_Belle",
-                characteritem: "Survivor_Tim"
-            },
-            stickerSlot: {
-                stickerpreset: 0,
-                stickerSet: [[], [], []]
-            },
+            inventory: { characters: ["Hunter_Belle", "Survivor_Tim"], skins: ["Skin_Belle_D_Default", "Skin_Tim_D_Default"], items: [], itemCounts: [] },
+            characterSlot: { hunterSlot: [], survivorSlot: [], characterhunteritem: "Hunter_Belle", characteritem: "Survivor_Tim" },
+            stickerSlot: { stickerpreset: 0, stickerSet: [[], [], []] },
             banStatus: { permanentBanned: false },
             immortalData: []
         };
@@ -102,35 +100,24 @@ app.all(['/live/player/authen', '/*/live/player/authen', '/api/live/player/authe
     }
 
     const player = db.players[uid];
-
     res.json({
         status: "success",
         code: 0,
         message: "OK",
-        data: {
-            player: player,
-            session_token: player.session_token
-        }
+        data: { player: player, session_token: player.session_token }
     });
 });
 
 app.all(['/live/player/getdata', '/*/live/player/getdata'], (req, res) => {
     const db = readDB();
     const uid = Object.keys(db.players)[0] || "default";
-    const player = db.players[uid] || { uid };
-    res.json({ status: "success", code: 0, message: "OK", data: player });
+    res.json({ status: "success", code: 0, message: "OK", data: db.players[uid] || { uid } });
 });
 
 app.all(['/live/player/inventory/getAll', '/*/live/player/inventory/getAll'], (req, res) => {
     const db = readDB();
     const uid = Object.keys(db.players)[0] || "default";
-    const player = db.players[uid] || {};
-    res.json({
-        status: "success",
-        code: 0,
-        message: "OK",
-        data: player.inventory || { characters: [], items: [], skins: [] }
-    });
+    res.json({ status: "success", code: 0, message: "OK", data: db.players[uid]?.inventory || {} });
 });
 
 app.all(['/live/player/characterslot/get', '/*/live/player/characterslot/get'], (req, res) => {
@@ -141,67 +128,15 @@ app.all(['/live/player/characterslot/get', '/*/live/player/characterslot/get'], 
         status: "success",
         code: 0,
         message: "OK",
-        data: {
-            session_token: player.session_token || "token",
-            slots: player.characterSlot || { hunterSlot: [], survivorSlot: [] },
-            role: player.role || "survivor"
-        }
-    });
-});
-
-app.all(['/live/player/characterslot/edit', '/*/live/player/characterslot/edit'], (req, res) => {
-    res.json({ status: "success", code: 0, message: "Updated successfully", data: req.body.slots || {} });
-});
-
-app.all(['/live/store/list', '/live/productlisting/list', '/live/item/listall'], (req, res) => {
-    res.json({
-        status: "success",
-        code: 0,
-        message: "OK",
-        data: { store: [], items: [] }
-    });
-});
-
-app.all(['/live/lootboxgo/api/open', '/api/open'], (req, res) => {
-    const { loot_box_short_code, amount = 1 } = req.body;
-    res.json({
-        status: "success",
-        code: 0,
-        message: "Opened successfully",
-        data: {
-            loot_box_type_str: loot_box_short_code || "Default_Gacha",
-            loot_box_amount: amount,
-            lootdrops: [
-                {
-                    short_code: "Item_Sample_01",
-                    name: "Sample Reward",
-                    type: "item",
-                    rarity: "1",
-                    amount: 1,
-                    is_dup: false
-                }
-            ]
-        }
+        data: { session_token: player.session_token, slots: player.characterSlot, role: player.role }
     });
 });
 
 app.all(['/matchmaking/v1/room/create', '/*/matchmaking/v1/room/create'], (req, res) => {
     const db = readDB();
-    const roomName = req.body.roomName || "Private Room";
-    const roomId = "room_" + Date.now();
-
-    const newRoom = {
-        roomId,
-        roomName,
-        ip: "127.0.0.1",
-        port: 7777,
-        currentPlayers: 1,
-        maxPlayers: 5
-    };
-
+    const newRoom = { roomId: "room_" + Date.now(), roomName: req.body.roomName || "Private Room", ip: "127.0.0.1", port: 7777, currentPlayers: 1, maxPlayers: 5 };
     db.rooms.push(newRoom);
     writeDB(db);
-
     res.json({ status: "success", code: 0, message: "Room created", data: newRoom });
 });
 
@@ -212,22 +147,28 @@ app.all(['/matchmaking/v1/room/list', '/*/matchmaking/v1/room/list'], (req, res)
 
 app.all(['/matchmaking/v1/room/join', '/*/matchmaking/v1/room/join'], (req, res) => {
     const db = readDB();
-    const targetRoom = db.rooms[0] || { roomId: "default", ip: "127.0.0.1", port: 7777 };
-    res.json({ status: "success", code: 0, message: "Joined successfully", data: targetRoom });
-});
-
-app.all(['/live/player/profile/edit', '/live/player/sticker/edit', '/live/player/inventory/addItem', '/live/player/inventory/removeItem'], (req, res) => {
-    res.json({ status: "success", code: 0, message: "Success", data: req.body });
+    res.json({ status: "success", code: 0, message: "Joined successfully", data: db.rooms[0] || { roomId: "default", ip: "127.0.0.1", port: 7777 } });
 });
 
 app.all('*', (req, res) => {
     res.json({ status: "success", code: 0, message: "OK", data: {} });
 });
 
-// --- 3. เปิดการทำงานเซิร์ฟเวอร์ ---
+// เปิดพอร์ตหลักสำหรับ Game API (ค่าพอร์ต 3000 หรือจาก .env)
 app.listen(PORT, () => {
     console.log(`====================================================`);
-    console.log(`HSHO Unified Standalone Server running on port ${PORT}`);
-    console.log(`Mode: Local JSON Storage (MongoDB Bypassed)`);
+    console.log(` HSHO Main Server running on port ${PORT}`);
+    console.log(` Mode: Local JSON Storage (MongoDB Bypassed)`);
     console.log(`====================================================`);
+});
+
+// เปิดพอร์ตเสริมสำหรับ Callback และ Uptime Services (พอร์ต 5001)
+const altApp = express();
+altApp.use(express.json());
+altApp.get('/', (req, res) => res.status(200).send('🟢 HSHO Callback & Uptime Service Port 5001 Active'));
+altApp.get('/ping', (req, res) => res.status(200).send('PONG'));
+altApp.use(app);
+
+altApp.listen(ALT_PORT, () => {
+    console.log(` [Callback & Uptime Server] Also listening on port ${ALT_PORT}`);
 });
