@@ -6,20 +6,31 @@ const cors = require('cors');
 
 const app = express();
 
-// ตั้งค่า Middleware ให้รองรับPayload ขนาดใหญ่และการเชื่อมต่อข้ามโดเมน
+// ตั้งค่า Middleware รองรับ Payload ขนาดใหญ่และการเชื่อมต่อข้ามโดเมน
 app.use(cors());
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
 const PORT = process.env.PORT || 3000;
-const MONGO_URI = process.env.MONGO_URI || "mongodb://annysecret916_db_user:jTwB8LdNBWjAKRsV@ac-yez96lk-shard-00-00.rd0on8i.mongodb.net:27017,ac-yez96lk-shard-00-01.rd0on8i.mongodb.net:27017,ac-yez96lk-shard-00-02.rd0on8i.mongodb.net:27017/?ssl=true&replicaSet=atlas-141wxv-shard-0&authSource=admin";
-const MONGO_DB_NAME = process.env.MONGO_DB_NAME || "Cluster0";
+
+// ค่าสำรองความปลอดภัย Connection String กรณีดึงจาก process.env แล้วมีช่องว่างหรือรูปแบบไม่ถูกต้อง
+const rawMongoUri = process.env.MONGO_URI ? process.env.MONGO_URI.trim() : "";
+const fallbackMongoUri = "mongodb://annysecret916_db_user:jTwB8LdNBWjAKRsV@ac-yez96lk-shard-00-00.rd0on8i.mongodb.net:27017,ac-yez96lk-shard-00-01.rd0on8i.mongodb.net:27017,ac-yez96lk-shard-00-02.rd0on8i.mongodb.net:27017/?ssl=true&replicaSet=atlas-141wxv-shard-0&authSource=admin";
+
+// ตรวจสอบและเลือกใช้ Connection String ที่มีโปรโตคอลถูกต้อง (mongodb:// หรือ mongodb+srv://)
+const MONGO_URI = (rawMongoUri.startsWith("mongodb://") || rawMongoUri.startsWith("mongodb+srv://"))
+    ? rawMongoUri
+    : fallbackMongoUri;
+
+const MONGO_DB_NAME = (process.env.MONGO_DB_NAME || "Cluster0").trim();
+const STEAM_APP_ID = (process.env.STEAM_APP_ID || "1898080").trim();
+const STEAM_API_KEY = (process.env.STEAM_API_KEY || "").trim();
 
 // ==========================================
 // API Endpoints หลักสำหรับเกม Home Sweet Home: Online
 // ==========================================
 
-// 1. ระบบตรวจสอบเวอร์ชัน (ป้องกัน Error code = 0)
+// 1. ระบบตรวจสอบเวอร์ชันเกม (ป้องกัน Error code = 0)
 app.get('/live/checkversion', async (req, res) => {
     try {
         const db = mongoose.connection.useDb(MONGO_DB_NAME);
@@ -65,7 +76,17 @@ app.get('/live/player/getdata', async (req, res) => {
     });
 });
 
-// 3. ระบบดักจับเส้นทาง API เกมทั่วไปแบบอัตโนมัติ (Wildcard Handler)
+// 3. ระบบตรวจสอบข้อมูล Steam Configuration
+app.get('/live/steam/info', (req, res) => {
+    res.json({
+        code: 0,
+        message: "Steam Config Success",
+        appId: STEAM_APP_ID,
+        hasApiKey: Boolean(STEAM_API_KEY)
+    });
+});
+
+// 4. ระบบดักจับเส้นทาง API เกมทั่วไปแบบอัตโนมัติ (Wildcard Handler)
 app.all('/live/*', (req, res) => {
     res.json({
         code: 0,
@@ -88,6 +109,7 @@ async function startServer() {
     try {
         await mongoose.connect(MONGO_URI, { dbName: MONGO_DB_NAME });
         console.log(`[MongoDB] Connected successfully to: ${MONGO_DB_NAME}`);
+        console.log(`[Steam] App ID configured: ${STEAM_APP_ID}`);
 
         app.listen(PORT, () => {
             console.log(`[Server] Ultimate Backend running on port ${PORT}`);
