@@ -13,7 +13,7 @@ app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
 const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://annysecret916_db_user:jTwB8LdNBWjAKRsV@cluster0.rd0on8i.mongodb.net/";
-const MONGO_DB_NAME = process.env.MONGO_DB_NAME || "HSHO-PrivateServer";
+const MONGO_DB_NAME = process.env.MONGO_DB_NAME || "Cluster0";
 
 // ==========================================
 // API Endpoints หลักสำหรับเกม Home Sweet Home: Online
