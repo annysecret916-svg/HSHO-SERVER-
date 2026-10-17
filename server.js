@@ -6,43 +6,39 @@ const cors = require('cors');
 
 const app = express();
 
-// ตั้งค่า Middleware
+// ตั้งค่า Middleware ให้รองรับPayload ขนาดใหญ่และการเชื่อมต่อข้ามโดเมน
 app.use(cors());
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
-// ดึงค่าการเชื่อมต่อจาก .env หรือกำหนดค่าเริ่มต้น
 const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI || "mongodb://Deathline:NATCHA1122@cluster0.4ha9v24.mongodb.net/?ssl=true&replicaSet=atlas-g7pxr0-shard-0&authSource=admin&appName=Cluster0";
 const MONGO_DB_NAME = process.env.MONGO_DB_NAME || "HSHO-PrivateServer";
 
 // ==========================================
-// API Endpoints สำหรับรองรับเกม Home Sweet Home: Online
+// API Endpoints หลักสำหรับเกม Home Sweet Home: Online
 // ==========================================
 
-// 1. ตรวจสอบเวอร์ชันและสถานะเซิร์ฟเวอร์ (แก้ Error code = 0)
+// 1. ระบบตรวจสอบเวอร์ชัน (ป้องกัน Error code = 0)
 app.get('/live/checkversion', async (req, res) => {
     try {
         const db = mongoose.connection.useDb(MONGO_DB_NAME);
         const serverInfo = await db.collection('serverinfo').findOne({});
         
-        if (serverInfo) {
-            return res.json({
-                code: 0,
-                message: "Version valid",
-                status: true,
-                correctversion: serverInfo.correctversion,
-                serverVersion: serverInfo.serverVersion,
-                ServerDevVersion: serverInfo.ServerDevVersion,
-                IsOnline: serverInfo.IsOnline,
-                serverTime: Date.now()
-            });
-        }
-
-        // ค่าสำรองกรณีในฐานข้อมูลยังไม่มีข้อมูล
-        res.json({
+        return res.json({
             code: 0,
             message: "Version valid",
+            status: true,
+            correctversion: serverInfo ? serverInfo.correctversion : true,
+            serverVersion: serverInfo ? serverInfo.serverVersion : "1.0.6.0",
+            ServerDevVersion: serverInfo ? serverInfo.ServerDevVersion : "0.0.0.1",
+            IsOnline: serverInfo ? serverInfo.IsOnline : true,
+            serverTime: Date.now()
+        });
+    } catch (err) {
+        res.json({
+            code: 0,
+            message: "Fallback Version valid",
             status: true,
             correctversion: true,
             serverVersion: "1.0.6.0",
@@ -50,12 +46,10 @@ app.get('/live/checkversion', async (req, res) => {
             IsOnline: true,
             serverTime: Date.now()
         });
-    } catch (err) {
-        res.status(500).json({ code: 500, message: err.message });
     }
 });
 
-// 2. ดึงข้อมูลผู้เล่น (PlayerData)
+// 2. ระบบข้อมูลโปรไฟล์และสถิติผู้เล่น
 app.get('/live/player/getdata', async (req, res) => {
     const uid = req.query.uid || "Player123";
     res.json({
@@ -63,46 +57,43 @@ app.get('/live/player/getdata', async (req, res) => {
         message: "Success",
         data: {
             uid: uid,
-            name: "HSH Private Player",
+            name: "HSH Ultimate Player",
             level: 99,
             exp: 999999,
-            currency: { gold: 50000, gem: 1000 }
+            currency: { gold: 999999, gem: 50000 }
         }
     });
 });
 
-// 3. ระบบ Authen พื้นฐาน
+// 3. ระบบดักจับเส้นทาง API เกมทั่วไปแบบอัตโนมัติ (Wildcard Handler)
 app.all('/live/*', (req, res) => {
     res.json({
         code: 0,
         message: "Success",
         status: "success",
-        token: "private-server-token-12345",
+        token: "private-server-token-ultimate",
         isBanned: false,
         data: []
     });
 });
 
-// หน้าแรกของ Server สำหรับเช็กสถานะผ่านเบราว์เซอร์
 app.get('/', (req, res) => {
-    res.send('HSHO Private Server is Running Successfully!');
+    res.send('HSHO Ultimate Private Server is Running Smoothly!');
 });
 
 // ==========================================
-// เริ่มต้นเชื่อมต่อ MongoDB และรันเซิร์ฟเวอร์
+// เริ่มต้นเชื่อมต่อฐานข้อมูลและเปิดเซิร์ฟเวอร์
 // ==========================================
 async function startServer() {
     try {
-        await mongoose.connect(MONGO_URI, {
-            dbName: MONGO_DB_NAME
-        });
-        console.log(`[MongoDB] Connected successfully to database: ${MONGO_DB_NAME}`);
+        await mongoose.connect(MONGO_URI, { dbName: MONGO_DB_NAME });
+        console.log(`[MongoDB] Connected successfully to: ${MONGO_DB_NAME}`);
 
         app.listen(PORT, () => {
-            console.log(`[Server] Running on port ${PORT}`);
+            console.log(`[Server] Ultimate Backend running on port ${PORT}`);
         });
     } catch (err) {
-        console.error('[Startup Error] Failed to connect to MongoDB:', err.message);
+        console.error('[Startup Error]:', err.message);
         process.exit(1);
     }
 }
